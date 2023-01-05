@@ -1,0 +1,395 @@
+---
+title: "Project"
+author: "zly"
+date: "2022-11-25"
+output: html_document
+---
+## library
+```{r}
+library(tidyverse)
+library(lmerTest)
+library(rehh)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(DBI)
+library(RSQLite)
+library(scales)
+library(lubridate)
+library(data.table)
+library(kinship2)
+library(qtl2)
+library(rMVP)
+```
+
+
+
+# QC options
+1. Missingness per SNP: --geno
+2. Missingness per ind: --mind
+3. MAF: --maf
+```{r}
+system("D:/plink/plink1.9/plink --bfile 1000g --geno 0.2 --mind 0.2 --maf 0.05 --make-bed --out 1000g_out")
+```
+
+```{r}
+
+system("D:/plink/plink1.9/plink --bfile 1000g_out --recode vcf-iid --out 1000g_out_vcf")
+
+```
+
+## Now we have a fully filtered VCF we can start some analyses with it.   
+
+## First we will investigate population structure using PCA
+One of the assumptions of PCA is that SNP data we use is independent(no spurious correlation among measured variables)   
+This is not true for most of SNP dataset as allele frequencies are correlated due to physical linkage and LD.   
+    
+# 1. Identify prune sites   
+--indep-pairwise demo: the first argument, 50 denotes we have set a window of 50 Kb.   The second argument, 2 is our window step size - meaning we move 2 bp each time we calculate linkage.   
+Finally, 0.2 represents r2 threshold.
+```{r}
+system("D:/plink/plink1.9/plink --vcf 1000g_out_vcf.vcf --double-id --allow-extra-chr --set-missing-var-ids @:# --indep-pairwise 50 2 0.2 --out 1000g")
+```
+# 2. PCA analysis
+```{r}
+system("D:/plink/plink1.9/plink --vcf 1000g_out_vcf.vcf --double-id --allow-extra-chr --set-missing-var-ids @:# --extract 1000g.prune.in --pca --make-bed --out 1000g_prune_pca")
+```
+## PCA plot
+```{r}
+
+plinkPCA <- read_table2("1000g_prune_pca.eigenvec",
+                        col_names = FALSE)
+plinkPCA <- plinkPCA[,c(-1,-2)] # Remove first 2 columns
+EigenValue <- scan("1000g_prune_pca.eigenval")
+# view(EigenValue)
+```
+
+## Set Columns names
+```{r}
+names(plinkPCA)[1:ncol(plinkPCA)] <- paste0("PC", 1:(ncol(plinkPCA)))
+```
+## Percentage variance explained
+```{r}
+pve <- data.frame(PC = 1:20, pve = EigenValue / sum(EigenValue) * 100)
+```
+## Make plot
+```{r}
+ggplot(pve, aes(PC,pve)) +
+  geom_bar(stat = "identity") +
+  ylab("Percentage variance explained") +
+  theme_light()
+```
+## Plot PCA
+```{r}
+ggplot(plinkPCA, aes(PC3,PC4)) +
+  geom_point(size = 3) +
+  coord_equal() +
+  theme_light() +
+  coord_equal() +
+  theme_light() +
+  xlab(paste0("PC3 (", signif(pve$pve[3],3), "%)")) +
+  ylab(paste0("PC4 (",signif(pve$pve[4],3),"%)"))
+```
+
+## Lets divide population in two groups
+```{r}
+# (pop <- rep(c("A","B"), each = nrow(plinkPCA) / 2))  ## Naively regroup
+# pop <- as.data.frame(pop)
+
+# pop <- rbind(pop,"B") # Odd number, so add one value manually
+# mypop = read_tsv("pop.txt", col_names = FALSE) # Read from file
+
+pop = read_table2("1000g_out.pheno",
+                        col_names = FALSE)
+
+region = read_table2("1000g_prune_pca.fam",col_names = FALSE)
+
+plinkPCA$pop <- pop[,3]
+plinkPCA$region <- region$X1
+# colnames(plinkPCA)[21] <- "pop"
+plinkPCA$col<- ifelse(plinkPCA$pop >= 0, 1, 0)
+plinkPCA$col<-as.factor(plinkPCA$col)
+```
+
+
+```{r}
+ggplot(plinkPCA, aes(PC7,PC8, color = region)) +
+  geom_point(size = 3) +
+  coord_equal() +
+  theme_light() +
+  coord_equal() +
+  theme_light() +
+  xlab(paste0("PC7 (", signif(pve$pve[7],3), "%)")) +
+  ylab(paste0("PC8 (",signif(pve$pve[8],3),"%)")) +
+  labs(title = "PCA on population structure")
+
+
+```
+
+```{r}
+fam = read_table2("1000g_prune_pca.fam",
+                        col_names = FALSE)
+table(fam$X2)
+##### 26 different populations in total
+```
+
+## Extracting the .BED file
+```{r}
+# bedMat <- read_table2("1000g_prune_pca.bed",
+                        # col_names = FALSE)
+
+```
+
+
+# 2022/12/21
+## MLM
+```{r}
+# install.packages("lmerTest")
+```
+## link .pheno to .fam, so .fam has phenotypes
+```{r}
+famdata <- read_table2("1000g_out.fam",
+                        col_names = FALSE)
+phenodata <- read_table2("1000g_out.pheno",
+                        col_names = FALSE)
+famdata$X6 <- phenodata$X3
+# write.table(famdata, file = '1000g_out.fam', col.names = F, row.names = F, quote = FALSE)
+# famdata1 <- read_table2("1000g_out_1.fam",
+                        # col_names = FALSE)
+```
+
+## Assoc test -- Manhattan (MLM)
+```{r}
+assoc_data <- read_table2("./assoc_output/MLM/yield.assoc.txt",
+                        col_names = TRUE)
+
+library(qqman)
+## Some format error
+assoc_data1 <- assoc_data[seq(1,nrow(assoc_data),2),c("chr","ps")]
+assoc_data2 <- assoc_data[seq(0,nrow(assoc_data),2),6]
+names(assoc_data2) <- c("p_wald")
+assoc_data_sub <- cbind(assoc_data1,assoc_data2)
+library(tidyr)
+assoc_data_sub <- tidyr::unite(assoc_data_sub,"SNP",chr,ps,sep=":",remove=FALSE)
+names(assoc_data_sub) <- c("SNP","CHR","BP","P")
+assoc_data_sub$P <- as.numeric(assoc_data_sub$P)
+```
+
+X chr is not shown in this study.   
+For each haplotype, the relative association with the **phenotype**, thus the y-axis represents the relavent frequency of a haplotype in that region in **affected** individuals compared to control individuals. y is the p-value of the association was observed by chance.   
+So the higher the peak, the stronger the association with the trait.
+```{r}
+
+manhattan(assoc_data_sub, col = c("red", "blue"),annotatePval = 0.0001) # Only autosome
+# assoc_data_sub <- assoc_data[c("chr","p_wald")]
+#  col = c(1:22),
+```
+## QQ plot
+```{r}
+qq(assoc_data_sub$P,
+   main = "Q-Q plot of GWAS p-values", xlim = c(0,7), ylim = c(0,12), pch = 18, col = "blue4", cex = 1.5, las = 1)
+```
+
+## Assoc test -- Manhattan (Normal Linear Model)
+```{r}
+assoc_data <- read_table2("./assoc_output/LinearModel/1000g_out_lm.assoc.txt",
+                        col_names = TRUE)
+```
+
+
+```{r}
+library(qqman)
+## Some format error
+assoc_data1 <- assoc_data[seq(1,nrow(assoc_data),2),c("chr","ps")]
+assoc_data2 <- assoc_data[seq(0,nrow(assoc_data),2),4]
+names(assoc_data2) <- c("p_wald")
+assoc_data_sub <- cbind(assoc_data1,assoc_data2)
+library(tidyr)
+assoc_data_sub <- tidyr::unite(assoc_data_sub,"SNP",chr,ps,sep=":",remove=FALSE)
+names(assoc_data_sub) <- c("SNP","CHR","BP","P")
+assoc_data_sub$P <- as.numeric(assoc_data_sub$P)
+
+manhattan(assoc_data_sub) # Only autosome
+# assoc_data_sub <- assoc_data[c("chr","p_wald")]
+#  col = c(1:22),
+
+qq(assoc_data_sub$P,
+   main = "Q-Q plot of GWAS p-values", xlim = c(0,7), ylim = c(0,12), pch = 18, col = "blue4", cex = 1.5, las = 1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+## MER as One-Way Repeated Measures ANOVA 
+### (A Single Crossed Factor)
+For this example, we will focus on only the effect of condition, so we will use 
+the data_COND dataset to average across different trials. First, let's plot the 
+data to get a better sense of what the data look like. 
+```{r}
+
+names(famdata) <- c("Ind","Pop","Far","Mor","Gender","Pheno")
+group_name <- c("EUR_GBR","EUR_CEU","EAS_CHB","EAS_CHS","AFR_ASW","AFR_YRI","AMR_CLM")
+fam_sub <- famdata %>% filter(famdata$Pop %in% group_name)
+names(fam_sub) <- c("Ind","Pop","Far","Mor","Gender","Pheno")
+unique(famdata$Pop)
+
+
+
+```
+
+``` {r plotting the effects of condition, echo=TRUE, fig.align="center"}
+ggplot(fam_sub, aes(x = Pop, y = Pheno)) +
+  geom_point(aes(fill=Pop), pch=21, size=2,
+             position=position_jitter(w=0.2, h=0))+
+  geom_boxplot(aes(fill=Pop), col="black", 
+               alpha=0.4, width=0.5, outlier.shape = NA)+
+  scale_x_discrete(name = "Population") +
+  scale_y_continuous(name = "Phenotypes") +
+  theme(axis.text=element_text(size=10, color="black"), 
+        axis.title=element_text(size=16, face="bold"),
+        axis.title.x = element_text(size=16),
+        plot.title=element_text(size=16, face="bold", hjust=0.5),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=16, face="bold"),
+        legend.position = "none")
+  
+```
+
+## 1.1. As an ANOVA...
+To implement a simple one-way repeated measures ANOVA, we have a few options. We 
+could directly code our ANOVA using the aov() function in R:
+``` {r one way ANOVA the hard way, echo=TRUE, warning=FALSE}
+summary(aov(Pheno ~ Pop + Error(Ind/Pop), data=fam_sub))
+```
+
+## 1.2. Getting the same result with a mixed-effect model...
+Because we have a single within-subject factor, we will  need to add a 
+random-effect of subject to account for individual differences between subjects.
+By partitioning the between-subjects variance out of our model, we can fairly test
+the effect of *condition*, because our residuals will now be independent of each
+other. 
+```{r one way ANOVA in a mixed effects model, echo=TRUE, warning=FALSE}
+# First we will define our model
+mod1 <- lmer(Pheno ~ 
+               # Fixed Effects:
+               Pop + 
+               # Random Effects: 
+               (1|kinmat), 
+             # Define the data: 
+             data=fam_sub, REML = TRUE)
+
+# We can then get the ANOVA results for our model:
+anova(mod1)
+```
+
+```{r}
+ggplot(fam_sub, aes(x = Pop, y = Pheno)) +
+  # geom_line(aes(group=Gender), col="black", alpha=0.8)+
+  geom_point(aes(fill=Gender), pch=21, size=2)+
+  # facet_wrap(~age_group) +
+  # scale_x_continuous(name = "Trial") +
+  # scale_y_continuous(name = "Phenotypes") +
+  theme(axis.text=element_text(size=16, color="black"), 
+        axis.title=element_text(size=16, face="bold"),
+        plot.title=element_text(size=16, face="bold", hjust=0.5),
+        strip.text = element_text(size=16, face="bold"),
+        legend.position = "none")
+```
+
+## LR without kinship
+```{r}
+gfit0 <- lm(Pheno ~ Pop, data = famdata)
+summary(gfit0)
+# plot(gfit0)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+## Plot the heatmap of Kinship Matrix
+read file
+```{r}
+library(pheatmap)
+kinmat <- read_table2("./assoc_output/MLM/1000g_out.sXX.txt",
+                        col_names = FALSE)
+
+colnames(kinmat) = paste("Ind", 1:2504, sep = "")
+rownames(kinmat) = paste("Ind", 1:2504, sep = "")
+```
+
+sampling and plot
+```{r}
+## Resampling
+Smp <- sample(c(1:2504),replace = FALSE, size = 20)
+Smp <- sort(Smp) 
+
+
+sub_kinmat <- as.data.frame(matrix(nrow = 20, ncol = 20))
+for (i in 1:20) {
+  for (j in 1:20) {
+    sub_kinmat[i,j] = kinmat[Smp[i],Smp[j]]
+  }
+  
+}
+names(sub_kinmat) <- as.character(Smp)
+row.names(sub_kinmat) <- as.character(Smp)
+
+library(lattice)
+sub_kinmat<-data.matrix(sub_kinmat)
+my.theme <- list(axis.text = list(cex = 0.4))
+levelplot(sub_kinmat, par.settings = my.theme)
+#######################################################################
+# pheatmap(sub_kinmat)
+```
+
+## Linear mixed-effects kinship model fit by maximum likelihood
+https://sahirbhatnagar.com/blog/2017/10/12/mixed-models-with-kinship-in-r/
+Need: .fam with pheno, kinship_matrix
+```{r}
+pr <- calc_genoprob(cross=iron, map=map, error_prob=0.002)
+out_pg <- scan1(pr, famdata$Pheno, kinship=kinship, Xcovar=famdata$Pop)
+```
+
+
+
+
+
+## Make Density histograms based on heritability
+```{r}
+her <- read_table2("./BLUP/1000g_out_blup.blup",
+                        col_names = TRUE)
+```
+
+
+```{r}
+her$Effect <- as.numeric(her$Effect)
+ggplot(her, aes(x=Effect)) +
+  geom_histogram(aes(y=..density..),position="identity", alpha=0.5, colour = "white")+
+  geom_density(alpha=0, fill="white")+
+  geom_vline(data=her, aes(xintercept=mean(Effect,na.rm = TRUE)),linetype="dashed",colour = "#FF3721")+
+  geom_vline(data=her, aes(xintercept=mean(Effect,na.rm = TRUE)-sd(Effect,na.rm = TRUE)),linetype="dashed")+
+  geom_vline(data=her, aes(xintercept=mean(Effect,na.rm = TRUE)+sd(Effect,na.rm = TRUE)),linetype="dashed")+
+  theme_classic(base_size = 18)+
+  ylab("Density")+
+  xlab("Population Structure h2 BLUPs")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+

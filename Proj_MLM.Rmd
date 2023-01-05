@@ -1,0 +1,231 @@
+---
+title: "Proj_MLM"
+author: "zly"
+date: "2023-01-01"
+output: html_document
+---
+## library
+```{r}
+library(tidyverse)
+library(lmerTest)
+library(rehh)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(DBI)
+library(RSQLite)
+library(scales)
+library(lubridate)
+library(data.table)
+library(kinship2)
+library(qtl2)
+library(rMVP)
+```
+
+Read Pheno & Population file
+```{r}
+
+famdata <- read_table2("1000g_out.fam",
+                        col_names = FALSE)
+phenodata <- read_table2("1000g_out.pheno",
+                        col_names = FALSE)
+famdata$X6 <- phenodata$X3
+# write.table(famdata, file = '1000g_out.fam', col.names = F, row.names = F, quote = FALSE)
+# famdata1 <- read_table2("1000g_out_1.fam",
+                        # col_names = FALSE)
+names(famdata) <- c("Ind","Pop","Far","Mor","Gender","Pheno")
+group_name <- c("EUR_GBR","EUR_CEU","EAS_CHB","EAS_CHS","AFR_ASW","AFR_YRI")
+fam_sub <- famdata %>% filter(famdata$Pop %in% group_name)
+names(fam_sub) <- c("Ind","Pop","Far","Mor","Gender","Pheno")
+unique(famdata$Pop)
+```
+
+Read Kinship heritability file
+```{r}
+her <- read_table2("./BLUP/1000g_out_blup.pred",
+                        col_names = TRUE)
+
+her$Phenotype <- famdata$Pheno
+her$Gender <- famdata$Gender
+```
+Short of ID2
+```{r}
+her$ID3[her$ID2 == "EUR_GBR"] <- 'A'
+her$ID3[her$ID2 == "EUR_FIN"] <- 'B'
+her$ID3[her$ID2 == "EAS_CHS"] <- 'C'
+her$ID3[her$ID2 == "AMR_PUR"] <- 'D'
+her$ID3[her$ID2 == "EAS_CDX"] <- 'E'
+her$ID3[her$ID2 == "AMR_CLM"] <- 'F'
+her$ID3[her$ID2 == "AMR_PEL"] <- 'G'
+her$ID3[her$ID2 == "SAS_PJL"] <- 'H'
+
+her$ID3[her$ID2 == "EAS_KHV"] <- 'I'
+her$ID3[her$ID2 == "AFR_ACB"] <- 'J'
+her$ID3[her$ID2 == "AFR_GWD"] <- 'K'
+her$ID3[her$ID2 == "AFR_ESN"] <- 'L'
+her$ID3[her$ID2 == "SAS_BEB"] <- 'M'
+her$ID3[her$ID2 == "AFR_MSL"] <- 'N'
+her$ID3[her$ID2 == "SAS_STU"] <- 'O'
+her$ID3[her$ID2 == "EUR_CEU"] <- 'P'
+
+her$ID3[her$ID2 == "AFR_YRI"] <- 'Q'
+her$ID3[her$ID2 == "EAS_CHB"] <- 'R'
+her$ID3[her$ID2 == "EAS_JPT"] <- 'S'
+her$ID3[her$ID2 == "AFR_LWK"] <- 'T'
+her$ID3[her$ID2 == "AFR_ASW"] <- 'U'
+her$ID3[her$ID2 == "AMR_MXL"] <- 'V'
+her$ID3[her$ID2 == "EUR_TSI"] <- 'W'
+her$ID3[her$ID2 == "SAS_GIH"] <- 'X'
+her$ID3[her$ID2 == "EUR_IBS"] <- 'Y'
+her$ID3[her$ID2 == "SAS_ITU"] <- 'Z'
+
+
+
+her$Culture[her$ID2 == "EUR_GBR"] <- 'EUR'
+her$Culture[her$ID2 == "EUR_FIN"] <- 'EUR'
+her$Culture[her$ID2 == "EAS_CHS"] <- 'EAS'
+her$Culture[her$ID2 == "AMR_PUR"] <- 'AMR'
+her$Culture[her$ID2 == "EAS_CDX"] <- 'EAS'
+her$Culture[her$ID2 == "AMR_CLM"] <- 'AMR'
+her$Culture[her$ID2 == "AMR_PEL"] <- 'AMR'
+her$Culture[her$ID2 == "SAS_PJL"] <- 'SAS'
+
+her$Culture[her$ID2 == "EAS_KHV"] <- 'EAS'
+her$Culture[her$ID2 == "AFR_ACB"] <- 'AFR'
+her$Culture[her$ID2 == "AFR_GWD"] <- 'AFR'
+her$Culture[her$ID2 == "AFR_ESN"] <- 'AFR'
+her$Culture[her$ID2 == "SAS_BEB"] <- 'SAS'
+her$Culture[her$ID2 == "AFR_MSL"] <- 'AFR'
+her$Culture[her$ID2 == "SAS_STU"] <- 'SAS'
+her$Culture[her$ID2 == "EUR_CEU"] <- 'EUR'
+
+her$Culture[her$ID2 == "AFR_YRI"] <- 'AFR'
+her$Culture[her$ID2 == "EAS_CHB"] <- 'EAS'
+her$Culture[her$ID2 == "EAS_JPT"] <- 'EAS'
+her$Culture[her$ID2 == "AFR_LWK"] <- 'AFR'
+her$Culture[her$ID2 == "AFR_ASW"] <- 'AFR'
+her$Culture[her$ID2 == "AMR_MXL"] <- 'AMR'
+her$Culture[her$ID2 == "EUR_TSI"] <- 'EUR'
+her$Culture[her$ID2 == "SAS_GIH"] <- 'SAS'
+her$Culture[her$ID2 == "EUR_IBS"] <- 'EUR'
+her$Culture[her$ID2 == "SAS_ITU"] <- 'SAS'
+```
+
+MLM
+```{r}
+mod1 <- lmer(Phenotype ~ 
+               # Fixed Effects:
+               ID3 * Gender + 
+               # Random Effects: 
+               (1|Genetics), 
+             # Define the data: 
+             data=her, REML = TRUE)
+
+# We can then get the ANOVA results for our model:
+anova(mod1)
+
+# plot(mod1)
+summary(mod1)
+```
+
+Linear Model
+```{r}
+mod0 <- lm(Phenotype ~ ID3 * Gender, data = her)
+summary(mod0)
+```
+
+ggplot with lmer
+```{r}
+library(emmeans)
+gr <- ref_grid(mod1, cov.keep= c('ID3','Gender'))
+emm <- emmeans(gr, spec= c('ID3','Gender'), level= 0.95)
+
+facet_name <- list("")
+
+ggplot(data= her, aes(x= ID3, y= Phenotype)) +
+    geom_ribbon(data= data.frame(emm), aes(ymin= lower.CL, ymax= upper.CL, y= NULL), fill= 'grey80') +
+    geom_line(data= data.frame(emm), aes(y= emmean)) +
+    geom_point(aes(col = her$Culture)) +
+    facet_wrap(~Gender)+
+  labs(title = "Phenotypes with Population Structure by gender in LMER") +
+  NULL
+# 
+# ggplot(data= her, aes(x= ID2, y= Phenotype)) +
+#   geom_line(data= data.frame(emm), aes(y= emmean)) +
+#   labs(title = "Phenotypes with Population Structure by gender in LMER")
+
+# ggplot(data= her, aes(x= ID3, y= Phenotype)) +
+#     # geom_ribbon(data= data.frame(emm), aes(ymin= lower.CL, ymax= upper.CL, y= NULL), fill= 'grey80') +
+#   geom_line(data= data.frame(emm), aes(y= emmean)) +
+#   geom_point(aes(col = her$Culture)) +
+#     NULL
+```
+ggplot with linear model
+```{r}
+library(emmeans)
+gr <- ref_grid(mod0, cov.keep= c('ID3','Gender'))
+emm <- emmeans(gr, spec= c('ID3','Gender'), level= 0.95)
+ggplot(data= her, aes(x= ID3, y= Phenotype)) +
+    geom_ribbon(data= data.frame(emm), aes(ymin= lower.CL, ymax= upper.CL, y= NULL), fill= 'grey80') +
+    geom_line(data= data.frame(emm), aes(y= emmean)) +
+    geom_point() +
+    facet_wrap(~Gender) +
+    labs(title = "Phenotypes with Population Structure by gender in Linear Regression") +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+
+    NULL
+# 
+# ggplot(data= her, aes(x= ID3, y= Phenotype)) +
+#     geom_ribbon(data= data.frame(emm), aes(ymin= lower.CL, ymax= upper.CL, y= NULL), fill= 'grey80') +
+#     geom_line(data= data.frame(emm), aes(y= emmean)) +
+#     geom_point() +
+#     NULL
+```
+
+Another library for plotting
+```{r}
+her$Genetics_factor<- ifelse(her$Genetics >= 0, 1, 0)
+herSub <- her[,c("ID3", "Phenotype", "Genetics_factor","Gender")]
+
+library(lme4)
+mod1 <- lmer(Phenotype ~ ID3 * Gender + (1|Genetics_factor), data=her, REML = TRUE)
+herSub$fixed.effect <- predict(mod1)
+
+
+
+
+library(plyr)
+l_ply(list(0, 1), function(x) herSub[[ paste0("random.effect.Genetics", x) ]] <<- herSub$fixed.effect + ranef(mod1)$Genetics[as.character(x),])
+
+# herSub.rand<-ldply(list(0,1,2), function(x) data.frame(
+#   ID2 = herSub$ID2,
+#   Genetics=x,
+#   rand=herSub$fixed.effect + ranef(mod1)$Genetics[as.character(x),]))
+# herSub$Genetics_factor <- herSub.rand$Genetics
+
+library(ggplot2)
+ggplot(herSub, aes(x = ID3, y = Phenotype, color=factor(Genetics_factor))) + 
+  geom_point() +
+  geom_line(aes(ID3, fixed.effect), color="black", size=2) +
+  geom_line(aes(ID3, random.effect.Genetics0), size=2) +
+  geom_line(aes(ID3, random.effect.Genetics1), size=2) +
+  facet_wrap(~Gender) +
+  labs(title = "Heritability explained by Genetic Relatedness") +
+  # theme(panel.grid.major = element_blank()) +
+  NULL
+
+anova(mod1, mod0)
+
+
+ggplot(herSub, aes(x = ID3, y = Phenotype, color=factor(Genetics_factor))) +
+  geom_line(aes(ID3, random.effect.Genetics0), size=2) +
+  geom_line(aes(ID3, random.effect.Genetics1), size=2) +
+  NULL
+```
+
+```{r}
+mod0 <- lm(Phenotype ~ ID2, data = her)
+herSub$fixed.effect.linear <- predict(mod0)
+
+```
+
